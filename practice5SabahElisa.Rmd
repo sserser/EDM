@@ -1,0 +1,290 @@
+---
+title: "practice 5"
+author: "Sabah and Elisa"
+date: "2023-05-04"
+output: html_document
+---
+
+# Deployment: Model-agnostic methods
+
+## Exercise 5.- Model-agnostic: Partial Dependency Plot (PDP).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import libraries 
+
+```{r}
+library(dplyr)
+library(plotly)
+library(reshape2)
+library(lubridate)
+library(randomForestSRC)
+library(modeldata)
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(lime)
+library(pdp)
+library(vip)
+library(tictoc)
+```
+
+# Open data
+
+```{r}
+set.seed(1)
+day_data <- read.csv("day.csv")
+day_data$dteday <- as_date(day_data$dteday)
+days_rest <- select(day_data, workingday, holiday, temp, hum, windspeed, cnt)
+days_rest$days_since_2011 <- int_length(interval(ymd("2011-01-01"), day_data$dteday)) / (3600*24)
+
+# Use one-hot encoding for season (1:winter, 3:summer, 4:fall) 
+days_rest$SUMMER <- ifelse(day_data$season == 3, 1, 0)
+days_rest$WINTER <- ifelse(day_data$season == 1, 1, 0)
+days_rest$FALL <- ifelse(day_data$season == 4, 1, 0)
+
+
+#	Create a feature MISTY: 1 when weathersit is 2. 0 in other cases 
+days_rest$MISTY <- ifelse(day_data$weathersit == 2, 1, 0)
+
+# Create a feature RAIN 1 when weathersit is 3 or 4. 0 in other case
+days_rest$RAIN <- ifelse(day_data$weathersit == 3 | day_data$weathersit == 4, 1, 0)
+
+#	Denormalize temperature
+days_rest$temp <- days_rest$temp * 47 - 8
+
+# Denormalize humidity
+days_rest$hum <- days_rest$hum * 100
+
+# Denormalize wind speed
+days_rest$windspeed <- days_rest$windspeed * 67
+
+```
+
+
+# 1.- One dimensional Partial Dependence Plot.
+
+## EXERCISE
+
+Apply PDP to the regression example of predicting bike rentals. Fit a random forest approximation for the prediction of bike rentals (cnt). Use the partial dependence plot to visualize the relationships the model learned. Use the slides shown in class as model.  
+
+```{r, warning=FALSE}
+
+# Create random forest model using all features in the "days_since" dataset
+rf <- rfsrc(cnt~., data=days_rest)
+
+# Create dataframe to store results
+res <- select(days_rest, days_since_2011, temp, hum, windspeed, cnt)
+
+# Get number of rows in dataset
+nr <- nrow(days_rest)
+
+# Loop through the first four features in the dataset to calculate the mean of the predicted values
+for(c in names(res)[1:4])
+{
+  for(i in 1:nr){
+    r <- days_rest
+    r[[c]] <- days_rest[[c]][i]
+    sal <- predict(rf, r)$predicted
+    res[[c]][i] <- (sum(sal) / nr)
+  }
+}
+
+# Add additional columns to the results dataframe
+res$R <- days_rest$days_since_2011
+res$T <- days_rest$temp
+res$H <- days_rest$hum
+res$W <- days_rest$windspeed
+
+```
+
+```{r}
+
+# Create plots
+p_1_1 <- ggplot(res,aes(x=R,y=days_since_2011))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Days_since_2011')
+
+p_1_2=ggplot(res,aes(x=T,y=temp))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Temperature')
+
+p_1_3=ggplot(res,aes(x=H,y=hum))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Humidity')
+
+p_1_4=ggplot(res,aes(x=W,y=windspeed))+
+  geom_rug(alpha=0.1,sides='b')+
+  geom_line()+
+  labs(x='Windspeed')
+
+subplot(p_1_1,p_1_2,p_1_3,p_1_4, shareX = FALSE, titleX = TRUE)
+
+```
+
+## QUESTION
+
+Analyse the influence of days since 2011, temperature, humidity and wind speed on the predicted bike counts.
+
+-> The Partial Dependency Plot for days_from_2011 is mostly increasing, except at the end when it starts to decrease. During the first year (0-365 days), the first 130 days bicycle rentals grow exponentially, then from day 130 until almost the end of the first year (day 330 approximately) it remains fairly constant. While at the end of the first year and during most of the second year it grows exponentially again, ending at about day 460. After that, it grows more slowly until day 650, where it finally decreases until the last day.
+
+Despite the last decline, we can conclude that bicycle rentals are increasing over time.
+The increase in bicycle rentals over time may be due to increased awareness of the health and environmental benefits of cycling as a mode of transport. In addition, the increase in bicycle infrastructure in the city, such as the creation of dedicated bicycle lanes and the installation of bicycle parking facilities, may have made cycling easier and safer. 
+
+-> The temperature graph shows how for negative temperatures and up to just before 4 degrees Celsius the bicycle rental remains constant with approximately 3190 bicycles. From 4 degrees up to 17 degrees, there is a large increase in bicycle rentals to a peak of around 5200 bicycles. From 18 to 23 degrees Celsius, rentals again remain more or less constant at this peak. Finally, from 23 degrees Celsius onwards, rentals start to decrease until a maximum temperature of 32 degrees Celsius where 5260 rentals are reached.
+
+Therefore, we can state that bicycle rentals also increase with temperature, until a peak is reached where temperatures are already very high and rentals start to decrease.
+People may prefer to use bicycles on days with more pleasant temperatures, neither too hot nor too cold. In addition, warmer and more pleasant temperatures may influence people's decision to opt for more sustainable and healthier modes of transport such as cycling rather than more polluting modes of transport. On the other hand, extreme temperatures, either too cold or too hot, may make people decide not to rent bicycles for reasons of comfort or safety.
+
+-> Respect to humidity, we observe that for humidities between 0 and 50% the rental is very similar with approximately 4700 bikes rented. Then for higher humidities the rent starts to decrease until it reaches a rent of 3750 bicycles where it seems that the rent would stabilise if we had more humidity.
+For this reason, we can deduce that as the humidity increases the rentals decrease, except in the first lower humidity range where the rentals remain approximately constant.
+When humidity is high, people may feel uncomfortable and sweaty when exercising outdoors, which may discourage them from renting a bicycle. In addition, when humidity is high, the air can feel heavier and thicker, which can make physical activity more difficult and less appealing.
+
+-> Regarding wind speed, we can observe that as wind speed increases, bicycle rentals decrease. At the beginning of the graph, when the wind speed is low (between 0 and 5.5 km/h), bicycle rentals increase slightly to around 4630 rentals. However, as the wind speed increases, from 5.5 to 23 km/h, rentals decrease but not significantly, reaching a minimum of 4200 bicycles. Finally, the rentals remain almost constant at the minimum reached. 
+
+In summary, we can conclude that for the most part, wind speed and bicycle rentals have a negative relationship, since as wind speed increases, rentals decrease.
+This may be because a strong wind can be uncomfortable and dangerous for cyclists, which may discourage people from renting bicycles. In addition, wind can make pedalling more difficult and cause cyclists to tire more quickly, which can also reduce interest in renting bicycles.
+
+
+# 2.- Bidimensional Partial Dependency Plot
+
+### EXERCISE
+
+Generate a 2D Partial Dependency Plot with humidity and temperature to predict the number of bikes rented depending on those parameters.
+
+BE CAREFUL: due to the size, extract a set of random samples from the BBDD before generating the data for the Partial Dependency Plot. Show the density distribution of both input features with the 2D plot as shown in the class slides. 
+TIP: Use geom_tile() to generate the 2D plot. Set width and height to avoid holes. 
+
+
+```{r,warning=FALSE}
+set.seed(1)
+
+#Sample 40 random rows 
+sam <- sample_n(days_rest, 40)
+temperature <- sam$temp
+humidity <- sam$hum
+th <- inner_join(data.frame(temperature), data.frame(humidity), by=character())
+th$p <- 0
+
+# Loop through each row of the dataset merged to predict the rental count using the random forest model
+for(i in 1:nrow(th)){
+  r <- days_rest
+  r$temp <- th$temp[i]
+  r$hum <- th$hum[i]
+  
+  sal <- predict(rf, r)$predicted
+  th[["p"]][i] <- sum(sal) / nr
+}
+
+# Create a heatmap 
+ggplot(th, aes(x=temperature, y=humidity)) +
+  geom_tile(aes(fill=p, width=10, height=10)) +
+  labs(x="Temperature", y="Humidity") +
+  guides(fill=guide_legend(title="Number of rentals")) +
+  geom_rug(alpha=0.1,sides = 'b')
+
+```
+
+## QUESTION:
+
+Interpret the results.
+
+-> In the plot, we can clearly see how the number of rentals varies depending on the temperature and humidity. The blue color scale indicates the level of rentals, with lighter blues indicating higher numbers of rentals. 
+
+-> We notice that the lowest number of rentals occurs when the temperature is really low, ranging from -10ºC to 0ºC, and the humidity is really high, between 90% and 100%. This is probably due to the cold weather and the high humidity, which makes it uncomfortable to ride a bike.
+
+-> On the other hand, the highest number of rentals occurs when the temperature is between 18ºC and 30ºC and the humidity is between 20% and 70%. This temperature range is likely the most comfortable for riding a bike, and the humidity within this range is not too high to make the ride unpleasant.
+
+-> The plot shows different zones based on the temperature and humidity values. Zone 1, for example, corresponds to temperatures ranging from -10ºC to 0ºC and humidity levels between 70% and 90%. Zone 2 is also within the same temperature range, but with lower humidity levels between 20% and 70%. Zone 3 corresponds to temperatures ranging from 0ºC to 11ºC and humidity levels between 90% and 100%. Zone 4 is within the same temperature range but with slightly lower humidity levels between 70% and 90%. Finally, Zone 5 corresponds to temperatures ranging from 0ºC to 11ºC and humidity levels between 20% and 70%.
+
+-> The plot also shows that the positive correlation between temperature and the number of rentals is generally true, although when the temperature is too high, it may have a negative correlation. Furthermore, the inverse relation between humidity and rentals is also evident, meaning that the higher the humidity, the lower the number of rentals.
+
+
+# 3.- PDP to explain the price of a house
+
+### EXERCISE
+
+Apply the previous concepts to predict the price of a house from the database kc_house_data.csv. In this case, use again a random forest approximation for the prediction based on the features bedrooms, bathrooms, sqft_living, sqft_lot, floors and yr_built. Use the partial dependence plot to visualize the relationships the model learned.
+BE CAREFUL: due to the size, extract a set of random samples from the BBDD before generating the data for the Partial Dependency Plot.
+
+```{r}
+set.seed(15)
+house_data <- read.csv("kc_house_data.csv")
+sam2 <- sample_n(house_data, 1000)
+sam2 <- select(sam2, bedrooms, bathrooms, sqft_living, sqft_lot, floors, yr_built, price)
+
+# Fit a random forest model using the sampled data
+rf <- rfsrc(price~., data=sam2)
+
+# Select specific columns from the sampled data
+res2 <- select(sam2, bedrooms, bathrooms, sqft_living, floors, price)
+
+# Get the number of rows in the sampled data
+nr <- nrow(sam2)
+
+# Iterate over the selected columns and rows to calculate predicted values
+for(c in names(res2)[1:4])
+{
+  for(i in 1:nr){
+    r <- sam2
+    r[[c]] <- sam2[[c]][i]
+    sal <- predict(rf, r)$predicted
+    res2[[c]][i] <- sum(sal) / nr
+  }
+}
+
+# Assign the calculated results to separate variables
+bedrooms1 <- res2$bedrooms
+bathrooms1 <- res2$bathrooms
+sqft_living1 <- res2$sqft_living
+floors1 <- res2$floors
+
+```
+
+```{r}
+
+# Create the plots
+p_2_1 <- ggplot(sam2,aes(x=bedrooms,y=bedrooms1))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Bedrooms')
+
+p_2_2 <- ggplot(sam2,aes(x=bathrooms,y=bathrooms1))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Bathrooms')
+
+p_2_3 <- ggplot(sam2,aes(x=sqft_living,y=sqft_living1))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Sqft_living')
+
+p_2_4 <- ggplot(sam2,aes(x=floors,y=floors1))+
+  geom_line()+
+  geom_rug(alpha=0.1,sides='b')+
+  labs(x='Floors')
+
+subplot(p_2_1,p_2_2,p_2_3,p_2_4, shareX = FALSE, titleX = TRUE)
+
+```
+
+
+## QUESTION:
+
+Analyse the influence of bedrooms, bathrooms, sqft_living and floors on the predicted price.
+
+-> In the plot for Bedrooms, we can see that houses with 1 bedroom have a significantly high price, slightly over 530,000 dollars. We believe this is because these houses are likely situated in the city center, and they may be either newly constructed or have undergone extensive renovations. As the number of bedrooms increases to 2, the price decreases slightly to around 527,500 dollars. However, for houses with 3 bedrooms, the price drops to the lowest of all, at less than 520,000 dollars. We suspect this could be because houses with 3 bedrooms are the most commonly found in all areas, including the least expensive ones. After that, the price starts to increase rapidly, reaching over 530,000 dollars for houses with 6 bedrooms. Interestingly, 5-bedroom houses are slightly cheaper than those with 4 bedrooms.
+
+-> The plot for Bathrooms shows a clear linear relationship with the price, where an increase in the number of bathrooms leads to a higher price. The lowest price is for houses with 0.5 bathrooms, which is around 400,000 dollars, while the highest is for houses with almost 4.5 bathrooms, priced at around 800,000 dollars. The reason why the bathroom value is represented as a float is that when a bathroom is added to a house, and it does not have a shower or other essential fittings, it does not count as an entire bathroom. Instead, it is counted as 0.5 or a fraction of a bathroom.
+
+-> In the plot for Sqft_living, we can observe another linear relationship where the price increases with the square footage of the house. The lowest price is when the house has around 500 square feet, priced at a bit lower than 40,000 dollars, and then it gradually increases to over 1,000,000 dollars when the square footage is around 6,770. We can also see some peaks in the plot, which could be due to the influence of the location. The price per square foot may vary depending on the specific location.
+
+-> Finally, in the plot for Floors, we can see yet another linear relationship between the number of floors and the price. As the number of floors increases, so does the price. Houses with one floor have the lowest price, at almost 515,000 dollars, whereas those with 2.5 floors have the highest price, at almost 540,000 dollars. However, the prices for houses with 3 and 3.5 floors are quite similar to the highest price. The value for floors is also represented as a float, for the same reason as bathrooms. Floors that are not complete, such as terraces, are counted as 0.5 floors.
+
+
+
